@@ -1,0 +1,34 @@
+{
+  "compilerOptions": {
+    // Environment Settings
+    "module": "nodenext",
+    "moduleResolution": "nodenext", // Ensure this matches module
+    "target": "esnext",
+
+    // Interop - Critical for importing 'express' in ESM
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+
+    // File Layout
+    "sourceMap": true,
+    "declaration": true,
+    "declarationMap": true,
+
+    // Stricter Typechecking
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+
+    // Strict Syntax
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "noUncheckedSideEffectImports": true,
+    "moduleDetection": "force",
+    "skipLibCheck": true
+  },
+  // Add this section so ts-node runs correctly with "type": "module"
+  "ts-node": {
+    "esm": true,
+    "experimentalSpecifierResolution": "node"
+  }
+}
