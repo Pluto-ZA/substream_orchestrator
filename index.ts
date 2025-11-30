@@ -203,7 +203,7 @@ async function startSubstream() {
         // 2. CURSOR HANDLING (CRITICAL)
         // We fetch the last cursor from ClickHouse so we don't start from scratch
         const cursorRes = await clickhouse.query({
-            query: "SELECT cursor FROM ${TABLE_CURSORS} LIMIT 1",
+            query: `SELECT cursor FROM ${TABLE_CURSORS} LIMIT 1`,
             format: "JSONEachRow"
         });
         const rows = await cursorRes.json();
