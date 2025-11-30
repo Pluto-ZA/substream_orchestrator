@@ -2,12 +2,10 @@ module.exports = {
     apps: [{
         name: "substream-orchestrator",
         script: "index.ts",
-        // Use the local ts-node installed in your project
-        interpreter: "./node_modules/.bin/ts-node",
-        // vitally important for "type": "module" projects
-        interpreter_args: "--esm",
+        interpreter: "./node_modules/.bin/tsx", // <--- Change this
+        // interpreter_args: "--esm",           // <--- DELETE this line (tsx doesn't need it)
         env: {
-            NODE_ENV: "development",
+            NODE_ENV: "production",
         }
     }]
 }
