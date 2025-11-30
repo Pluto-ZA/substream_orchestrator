@@ -280,4 +280,5 @@ async function startSubstream() {
 app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
     console.log(`endpoints: /add-address, /delete-address, /update-addresses, /list-addresses`);
+    startSubstream();
 });
