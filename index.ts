@@ -14,6 +14,7 @@ const SUBSTREAMS_ENDPOINT = "mainnet.sol.streamingfast.io:443";
 const API_TOKEN = process.env.SUBSTREAMS_API_TOKEN;
 const OUTPUT_MODULE = "map_balance_changes";
 const TABLE_WATCHLIST = "solana.watched_wallets";
+const TABLE_CURSORS = "solana.cursors_node";
 
 // --- CLICKHOUSE SETUP ---
 const clickhouse = createClient({
@@ -76,7 +77,7 @@ function normalizeInput(input: any): string[] {
 app.get('/current-block', async (req, res) => {
     try {
         const resultSet = await clickhouse.query({
-            query: `SELECT max(block_num) as current_block FROM solana.cursors`,
+            query: `SELECT max(block_num) as current_block FROM ${TABLE_CURSORS}`,
             format: 'JSONEachRow',
         });
         
@@ -92,6 +93,7 @@ app.get('/current-block', async (req, res) => {
         
     } catch (error) {
         console.error("Failed to fetch block:", error);
+        // @ts-ignore
         res.status(500).json({ error: error.message });
     }
 });
@@ -204,7 +206,7 @@ async function startSubstream() {
         // 2. CURSOR HANDLING (CRITICAL)
         // We fetch the last cursor from ClickHouse so we don't start from scratch
         const cursorRes = await clickhouse.query({
-            query: "SELECT cursor FROM solana.cursors_node LIMIT 1",
+            query: "SELECT cursor FROM ${TABLE_CURSORS} LIMIT 1",
             format: "JSONEachRow"
         });
         const rows = await cursorRes.json();
@@ -233,20 +235,20 @@ async function startSubstream() {
                 
                 if (output && output.mapOutput) {
                     const decodedData = output.mapOutput.unpack(registry);
+                    console.log("Decoded Data keys:", Object.keys(decodedData || {}));
                     
                     if (decodedData && (decodedData as any).params) {
-                        const changes = (decodedData as any).params; // The list of BalanceChange
+                        const changes = (decodedData as any).params || (decodedData as any).balanceChanges || (decodedData as any).changes;
                         
-                        if (changes.length > 0) {
+                        if (changes && Array.isArray(changes) && changes.length > 0) {
                             console.log(`[Data] Block ${clock?.number}: Inserting ${changes.length} rows`);
                             
-                            // 3. INSERT INTO CLICKHOUSE
                             await clickhouse.insert({
                                 table: 'wallet_balance_changes',
                                 values: changes.map((row: any) => ({
-                                    id: `${row.txId}:${row.owner}:${row.mint}`, // Generate ID
-                                    block_time: row.blockTime, // Ensure proto field names match (camelCase usually in JS)
-                                    block_slot: row.blockSlot,
+                                    id: `${row.txId}:${row.owner}:${row.mint}`,
+                                    block_time: row.blockTime,
+                                    block_slot: row.blockSlot, // Make sure Proto uses camelCase, otherwise try row.block_slot
                                     tx_id: row.txId,
                                     owner: row.owner,
                                     mint: row.mint,
@@ -263,7 +265,7 @@ async function startSubstream() {
                 // 4. SAVE CURSOR
                 // Save cursor every block so we resume correctly on restart
                 await clickhouse.command({
-                    query: `INSERT INTO solana.cursors_node (id, cursor, block_num) VALUES (1, '${cursor}', ${clock?.number})`
+                    query: `INSERT INTO ${TABLE_CURSORS} (id, cursor, block_num) VALUES (1, '${cursor}', ${clock?.number})`
                 });
             }
         }
