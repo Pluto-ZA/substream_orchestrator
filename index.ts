@@ -9,7 +9,7 @@ dotenv.config();
 
 // --- CONFIGURATION ---
 const PORT = 3000;
-const SPKG_PATH = "./jupiter_dex_substreams.spkg";
+const SPKG_PATH = "./substream.spkg";
 const SUBSTREAMS_ENDPOINT = "mainnet.sol.streamingfast.io:443";
 const API_TOKEN = process.env.SUBSTREAMS_API_TOKEN;
 const OUTPUT_MODULE = "map_balance_changes";
@@ -181,9 +181,6 @@ async function startSubstream() {
     try {
         const substreamPackage = await readPackageFromFile(SPKG_PATH);
         
-        // 1. APPLY PARAMS DYNAMICALLY
-        // This sends the whitelist to the server.
-        // The server filters the data BEFORE sending it to you (saving Egress costs).
         const paramUpdates = [
             `map_balance_changes=${paramsString}`
         ];
