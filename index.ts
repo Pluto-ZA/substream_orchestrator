@@ -73,6 +73,28 @@ function normalizeInput(input: any): string[] {
 //                  ROUTES
 // ==========================================
 
+app.get('/current-block', async (req, res) => {
+    try {
+        const resultSet = await clickhouse.query({
+            query: `SELECT max(block_num) as current_block FROM solana.cursors`,
+            format: 'JSONEachRow',
+        });
+        
+        const rows = await resultSet.json();
+        // @ts-ignore
+        const currentBlock = rows[0]?.current_block || 0;
+        
+        res.json({
+            status: 'ok',
+            current_block: currentBlock,
+            timestamp: new Date().toISOString()
+        });
+        
+    } catch (error) {
+        console.error("Failed to fetch block:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
 // 1. UPDATE (Replace entire list)
 app.post("/add-address", async (req, res) => {
     const { address, addresses } = req.body;
