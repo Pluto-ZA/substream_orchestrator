@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@clickhouse/client':
+        specifier: ^1.14.0
+        version: 1.14.0
       '@connectrpc/connect':
         specifier: ^2.1.1
         version: 2.1.1
@@ -87,6 +90,13 @@ packages:
     resolution: {integrity: sha512-RF7EcwHF9wGUs4EBSweHtXZHfVL7bqkSPD1zwgJmG/ejo/I7KXS8+mT56fjw4r6MNgyNTV9F9gVfTsx4D6vhhA==}
     engines: {node: '>=12'}
     hasBin: true
+
+  '@clickhouse/client-common@1.14.0':
+    resolution: {integrity: sha512-CyUcv2iCkZ1A++vmOSufYRpHR3aAWVfbrWed7ATzf0yyx/BW/2SEqlL07vBpSRa3BIkQe/DSOHVv8JkWZpUOwQ==}
+
+  '@clickhouse/client@1.14.0':
+    resolution: {integrity: sha512-co2spjR7wZoZ3Ck0H/jv76bpiuO3oJHtOmq9/gxFiod2DcT9NFg01u/hXcG8MJFnEJuMB6e3vGqS6IOnLwHqRw==}
+    engines: {node: '>=16'}
 
   '@connectrpc/connect-node@2.1.1':
     resolution: {integrity: sha512-s3TfsI1XF+n+1z6MBS9rTnFsxxR4Rw5wmdEnkQINli81ESGxcsfaEet8duzq8LVuuCupmhUsgpRo0Nv9pZkufg==}
@@ -542,6 +552,12 @@ snapshots:
       '@bufbuild/buf-linux-x64': 1.60.0
       '@bufbuild/buf-win32-arm64': 1.60.0
       '@bufbuild/buf-win32-x64': 1.60.0
+
+  '@clickhouse/client-common@1.14.0': {}
+
+  '@clickhouse/client@1.14.0':
+    dependencies:
+      '@clickhouse/client-common': 1.14.0
 
   '@connectrpc/connect-node@2.1.1(@connectrpc/connect@2.1.1)':
     dependencies:

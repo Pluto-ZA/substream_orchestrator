@@ -3,7 +3,7 @@ import dotenv from "dotenv";
 import { readPackageFromFile } from "@substreams/manifest";
 import { createRegistry, createRequest, applyParams, streamBlocks } from '@substreams/core';
 import { createConnectTransport } from "@connectrpc/connect-node";
-import { createSubstream } from "@substreams/core";
+import { createClient } from '@clickhouse/client';
 
 dotenv.config();
 
@@ -12,7 +12,15 @@ const PORT = 3000;
 const SPKG_PATH = "./jupiter_dex_substreams.spkg";
 const SUBSTREAMS_ENDPOINT = "mainnet.sol.streamingfast.io:443";
 const API_TOKEN = process.env.SUBSTREAMS_API_TOKEN;
-const OUTPUT_MODULE = "map_relevant_transactions";
+const OUTPUT_MODULE = "map_balance_changes";
+
+// --- CLICKHOUSE SETUP ---
+const clickhouse = createClient({
+    url: 'http://127.0.0.1:8123',
+    username: 'default',
+    password: '',
+    database: 'solana',
+});
 
 // --- STATE MANAGEMENT ---
 let activeStreamController: AbortController | null = null;
@@ -133,21 +141,23 @@ async function startSubstream(addresses: string[]) {
     activeStreamController = controller;
     const signal = controller.signal;
     
+    // If list is empty, don't start stream (saves money)
     if (addresses.length === 0) {
-        console.log("[Orchestrator] No addresses to track. Idling...");
+        console.log("[Orchestrator] No addresses to track. Stream paused.");
         return;
     }
     
     const paramsString = addresses.join(",");
-    console.log(`[Orchestrator] Starting stream for ${addresses.length} addresses...`);
+    console.log(`[Orchestrator] Starting stream with ${addresses.length} whitelisted addresses...`);
     
     try {
         const substreamPackage = await readPackageFromFile(SPKG_PATH);
         
+        // 1. APPLY PARAMS DYNAMICALLY
+        // This sends the whitelist to the server.
+        // The server filters the data BEFORE sending it to you (saving Egress costs).
         const paramUpdates = [
-            `map_jupiter_trading_data=${paramsString}`,
-            `map_relevant_transactions=${paramsString}`,
-            `map_jupiter_instructions=${paramsString}`
+            `map_balance_changes=${paramsString}`
         ];
         
         applyParams(paramUpdates, substreamPackage.modules!.modules);
@@ -165,32 +175,70 @@ async function startSubstream(addresses: string[]) {
             ],
         });
         
+        // 2. CURSOR HANDLING (CRITICAL)
+        // We fetch the last cursor from ClickHouse so we don't start from scratch
+        const cursorRes = await clickhouse.query({
+            query: "SELECT cursor FROM solana.cursors_node LIMIT 1",
+            format: "JSONEachRow"
+        });
+        const rows = await cursorRes.json();
+        // @ts-ignore
+        const startCursor = rows.length > 0 ? rows[0].cursor : undefined;
+        
         const request = createRequest({
             substreamPackage,
             outputModule: OUTPUT_MODULE,
             productionMode: true,
+            startBlockNum: 376967294, // Only used if cursor is undefined
+            startCursor: startCursor
         });
         
         const stream = streamBlocks(transport, request);
         
+        console.log("[Orchestrator] Stream connected.");
+        
         for await (const response of stream) {
-            if (signal.aborted) {
-                console.log("[Orchestrator] Stream stopped cleanly.");
-                break;
-            }
+            if (signal.aborted) break;
             
             if (response.message.case === "blockScopedData") {
                 const output = response.message.value.output;
+                const cursor = response.message.value.cursor;
+                const clock = response.message.value.clock;
+                
                 if (output && output.mapOutput) {
                     const decodedData = output.mapOutput.unpack(registry);
-                    if (decodedData) {
-                        const txs = (decodedData as any).transactions || [];
-                        if (txs.length > 0) {
-                            console.log(`[Data] Block ${response.message.value.clock?.number}: Found ${txs.length} txs`);
-                            // Process data here...
+                    
+                    if (decodedData && (decodedData as any).params) {
+                        const changes = (decodedData as any).params; // The list of BalanceChange
+                        
+                        if (changes.length > 0) {
+                            console.log(`[Data] Block ${clock?.number}: Inserting ${changes.length} rows`);
+                            
+                            // 3. INSERT INTO CLICKHOUSE
+                            await clickhouse.insert({
+                                table: 'wallet_balance_changes',
+                                values: changes.map((row: any) => ({
+                                    id: `${row.txId}:${row.owner}:${row.mint}`, // Generate ID
+                                    block_time: row.blockTime, // Ensure proto field names match (camelCase usually in JS)
+                                    block_slot: row.blockSlot,
+                                    tx_id: row.txId,
+                                    owner: row.owner,
+                                    mint: row.mint,
+                                    change_amount: parseFloat(row.changeAmount),
+                                    new_balance: parseFloat(row.newBalance),
+                                    decimals: row.decimals
+                                })),
+                                format: 'JSONEachRow'
+                            });
                         }
                     }
                 }
+                
+                // 4. SAVE CURSOR
+                // Save cursor every block so we resume correctly on restart
+                await clickhouse.command({
+                    query: `INSERT INTO solana.cursors_node (id, cursor, block_num) VALUES (1, '${cursor}', ${clock?.number})`
+                });
             }
         }
     } catch (err: any) {
@@ -200,7 +248,6 @@ async function startSubstream(addresses: string[]) {
         setTimeout(() => startSubstream(Array.from(monitoredAddresses)), 3000);
     }
 }
-
 // --- START SERVER ---
 app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
