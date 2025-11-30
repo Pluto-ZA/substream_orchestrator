@@ -223,6 +223,7 @@ async function startSubstream() {
         console.log("[Orchestrator] Stream connected.");
         
         for await (const response of stream) {
+            console.log(response);
             if (signal.aborted) break;
             
             if (response.message.case === "blockScopedData") {
