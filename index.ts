@@ -13,6 +13,7 @@ const SPKG_PATH = "./jupiter_dex_substreams.spkg";
 const SUBSTREAMS_ENDPOINT = "mainnet.sol.streamingfast.io:443";
 const API_TOKEN = process.env.SUBSTREAMS_API_TOKEN;
 const OUTPUT_MODULE = "map_balance_changes";
+const TABLE_WATCHLIST = "solana.watched_wallets";
 
 // --- CLICKHOUSE SETUP ---
 const clickhouse = createClient({
@@ -31,6 +32,20 @@ let monitoredAddresses = new Set<string>();
 const app = express();
 app.use(express.json());
 
+async function fetchWhitelist(): Promise<string[]> {
+    try {
+        const result = await clickhouse.query({
+            query: `SELECT DISTINCT address FROM ${TABLE_WATCHLIST}`,
+            format: "JSONEachRow"
+        });
+        const rows = await result.json();
+        const list = rows.map((r: any) => r.address).filter((a: string) => !!a);
+        return list;
+    } catch (err) {
+        console.error("[DB] Failed to fetch whitelist:", err);
+        return [];
+    }
+}
 // ==========================================
 //               HELPER FUNCTIONS
 // ==========================================
@@ -61,75 +76,60 @@ function normalizeInput(input: any): string[] {
 // ==========================================
 
 // 1. UPDATE (Replace entire list)
-app.post("/update-addresses", (req, res) => {
-    const { addresses } = req.body;
-    const list = normalizeInput(addresses);
+app.post("/add-address", async (req, res) => {
+    const { address, addresses } = req.body;
+    const list = normalizeInput(address || addresses);
     
     if (list.length === 0) return res.status(400).json({ error: "Invalid input" });
     
-    monitoredAddresses = new Set(list);
-    
-    console.log(`\n[API] Reset list. Tracking ${monitoredAddresses.size} addresses.`);
-    triggerStreamRestart();
-    
-    res.json({ status: "success", count: monitoredAddresses.size, addresses: Array.from(monitoredAddresses) });
-});
-
-// 2. ADD (Append to list)
-app.post("/add-address", (req, res) => {
-    const { address, addresses } = req.body; // Accept "address" (single) or "addresses" (array)
-    const input = address || addresses;
-    const list = normalizeInput(input);
-    
-    if (list.length === 0) return res.status(400).json({ error: "Provide 'address' string or 'addresses' array" });
-    
-    let changed = false;
-    list.forEach(addr => {
-        if (!monitoredAddresses.has(addr)) {
-            monitoredAddresses.add(addr);
-            changed = true;
-        }
-    });
-    
-    if (changed) {
-        console.log(`\n[API] Added ${list.length} items. Total: ${monitoredAddresses.size}`);
+    try {
+        // Insert into ClickHouse
+        await clickhouse.insert({
+            table: TABLE_WATCHLIST,
+            values: list.map(addr => ({ address: addr })),
+            format: 'JSONEachRow'
+        });
+        
+        console.log(`[API] Added ${list.length} wallets to DB.`);
+        
+        // Restart stream to pick up changes
         triggerStreamRestart();
-    } else {
-        console.log(`\n[API] Skipped add (Duplicate).`);
+        
+        res.json({ status: "success", added: list.length });
+    } catch (error: any) {
+        console.error("DB Error:", error);
+        res.status(500).json({ error: "Database insert failed" });
     }
-    
-    res.json({ status: "success", changed, count: monitoredAddresses.size, addresses: Array.from(monitoredAddresses) });
 });
 
-// 3. DELETE (Remove from list)
-app.post("/delete-address", (req, res) => {
+app.post("/delete-address", async (req, res) => {
     const { address, addresses } = req.body;
-    const input = address || addresses;
-    const list = normalizeInput(input);
+    const list = normalizeInput(address || addresses);
     
-    if (list.length === 0) return res.status(400).json({ error: "Provide 'address' string or 'addresses' array" });
+    if (list.length === 0) return res.status(400).json({ error: "Invalid input" });
     
-    let changed = false;
-    list.forEach(addr => {
-        if (monitoredAddresses.has(addr)) {
-            monitoredAddresses.delete(addr);
-            changed = true;
-        }
-    });
-    
-    if (changed) {
-        console.log(`\n[API] Removed ${list.length} items. Total: ${monitoredAddresses.size}`);
+    try {
+        // ClickHouse Mutation to remove
+        const listStr = list.map(a => `'${a}'`).join(',');
+        await clickhouse.command({
+            query: `ALTER TABLE ${TABLE_WATCHLIST} DELETE WHERE address IN (${listStr})`
+        });
+        
+        console.log(`[API] Removed ${list.length} wallets from DB.`);
+        
+        // Restart stream to pick up changes
         triggerStreamRestart();
-    } else {
-        console.log(`\n[API] Skipped delete (Not found).`);
+        
+        res.json({ status: "success", removed: list.length });
+    } catch (error: any) {
+        console.error("DB Error:", error);
+        res.status(500).json({ error: "Database delete failed" });
     }
-    
-    res.json({ status: "success", changed, count: monitoredAddresses.size, addresses: Array.from(monitoredAddresses) });
 });
 
-// 4. LIST (View current)
-app.get("/list-addresses", (req, res) => {
-    res.json({ count: monitoredAddresses.size, addresses: Array.from(monitoredAddresses) });
+app.get("/list-addresses", async (req, res) => {
+    const list = await fetchWhitelist();
+    res.json({ count: list.length, addresses: list });
 });
 
 // ==========================================
