@@ -51,18 +51,16 @@ async function fetchWhitelist(): Promise<string[]> {
 // ==========================================
 
 // Helper to handle the stream restart logic safely
-function triggerStreamRestart() {
+async function triggerStreamRestart() {
     if (activeStreamController) {
-        console.log("[Orchestrator] Aborting current stream...");
+        console.log("[Orchestrator] Watchlist updated. Restarting stream...");
         activeStreamController.abort();
+    } else {
+        // If not running, start it
+        startSubstream();
     }
-    
-    // Small delay to ensure clean socket closure
-    setTimeout(() => {
-        // Convert Set back to Array for processing
-        startSubstream(Array.from(monitoredAddresses));
-    }, 500);
 }
+
 
 // Helper to normalize input (accepts string or array of strings)
 function normalizeInput(input: any): string[] {
@@ -136,14 +134,20 @@ app.get("/list-addresses", async (req, res) => {
 //             SUBSTREAM LOGIC
 // ==========================================
 
-async function startSubstream(addresses: string[]) {
+async function startSubstream() {
+    if (activeStreamController && !activeStreamController.signal.aborted) {
+        activeStreamController.abort();
+    }
+    
     const controller = new AbortController();
     activeStreamController = controller;
     const signal = controller.signal;
     
-    // If list is empty, don't start stream (saves money)
+    // 2. Fetch Params from DB (Source of Truth)
+    const addresses = await fetchWhitelist();
+    
     if (addresses.length === 0) {
-        console.log("[Orchestrator] No addresses to track. Stream paused.");
+        console.log("[Orchestrator] DB Watchlist is empty. Stream idling...");
         return;
     }
     
@@ -245,7 +249,7 @@ async function startSubstream(addresses: string[]) {
         if (signal.aborted) return;
         console.error("[Orchestrator] Stream Error:", err);
         console.log("[Orchestrator] Retrying in 3 seconds...");
-        setTimeout(() => startSubstream(Array.from(monitoredAddresses)), 3000);
+        setTimeout(() => startSubstream(), 3000);
     }
 }
 // --- START SERVER ---
