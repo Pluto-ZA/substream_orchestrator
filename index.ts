@@ -217,7 +217,7 @@ async function startSubstream() {
             substreamPackage,
             outputModule: OUTPUT_MODULE,
             productionMode: true,
-            startBlockNum: 376967294, // Only used if cursor is undefined
+            startBlockNum: 379156361, // Only used if cursor is undefined
             startCursor: startCursor
         });
         
