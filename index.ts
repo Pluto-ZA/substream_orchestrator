@@ -4,6 +4,8 @@ import { readPackageFromFile } from "@substreams/manifest";
 import { createRegistry, createRequest, applyParams, streamBlocks } from '@substreams/core';
 import { createConnectTransport } from "@connectrpc/connect-node";
 import { createClient } from '@clickhouse/client';
+// @ts-ignore
+BigInt.prototype.toJSON = function () { return this.toString(); };
 
 dotenv.config();
 
