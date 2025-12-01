@@ -247,7 +247,7 @@ async function startSubstream() {
                     }
                 }
                 
-                if (highestBlock > 0n && lastKnownCursor) {
+                if (highestBlock > lastKnownCursor && lastKnownCursor) {
                     console.log(`[Sync] Scanned up to ${highestBlock} (No data found)`);
                     
                     await clickhouse.command({
