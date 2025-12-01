@@ -56,6 +56,9 @@ async function triggerStreamRestart() {
     if (activeStreamController) {
         console.log("[Orchestrator] Watchlist updated. Restarting stream...");
         activeStreamController.abort();
+        activeStreamController = null;
+        
+        setTimeout(() => startSubstream(), 2000);
     } else {
         // If not running, start it
         startSubstream();
@@ -224,6 +227,7 @@ async function startSubstream() {
         
         for await (const response of stream) {
             if (signal.aborted) break;
+            console.dir(response, { depth: null });
             
             if (response.message.case === "blockScopedData") {
                 const output = response.message.value.output;
