@@ -102,7 +102,6 @@ app.get('/current-block', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
-// 1. UPDATE (Replace entire list)
 app.post("/add-address", async (req, res) => {
     const { address, addresses } = req.body;
     const list = normalizeInput(address || addresses);
