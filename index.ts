@@ -219,7 +219,7 @@ async function startSubstream() {
             substreamPackage,
             outputModule: OUTPUT_MODULE,
             productionMode: true,
-            startBlockNum: 379156361, // Only used if cursor is undefined
+            startBlockNum: 379156361,
             startCursor: startCursor
         });
         
@@ -227,46 +227,70 @@ async function startSubstream() {
         
         console.log("[Orchestrator] Stream connected.");
         
+        let lastKnownCursor = startCursor;
+        
         for await (const response of stream) {
             if (signal.aborted) break;
-            console.dir(response, { depth: null });
+            // --- CASE 1: PROGRESS (Heartbeat) ---
+            if (response.message.case === "progress") {
+                const prog = response.message.value;
+                const stages = prog.stages || [];
+                
+                let highestBlock = 0n;
+                
+                // Find the highest block the server has finished scanning
+                for (const stage of stages) {
+                    for (const range of stage.completedRanges) {
+                        if (range.endBlock > highestBlock) {
+                            highestBlock = range.endBlock;
+                        }
+                    }
+                }
+                
+                if (highestBlock > 0n && lastKnownCursor) {
+                    console.log(`[Sync] Scanned up to ${highestBlock} (No data found)`);
+                    
+                    await clickhouse.command({
+                        query: `INSERT INTO ${TABLE_CURSORS} (id, cursor, block_num) VALUES (1, '${lastKnownCursor}', ${highestBlock.toString()})`
+                    });
+                }
+            }
             
+            // --- CASE 2: REAL DATA ---
             if (response.message.case === "blockScopedData") {
                 const output = response.message.value.output;
                 const cursor = response.message.value.cursor;
                 const clock = response.message.value.clock;
                 
+                lastKnownCursor = cursor;
+                
                 if (output && output.mapOutput) {
                     const decodedData = output.mapOutput.unpack(registry);
-                    console.log("Decoded Data keys:", Object.keys(decodedData || {}));
                     
-                    if (decodedData && (decodedData as any).params) {
-                        const changes = (decodedData as any).params || (decodedData as any).balanceChanges || (decodedData as any).changes;
+                    const changes = (decodedData as any).params || (decodedData as any).balanceChanges || (decodedData as any).changes;
+                    
+                    if (changes && Array.isArray(changes) && changes.length > 0) {
+                        console.log(`✅ [Data] Block ${clock?.number}: Inserting ${changes.length} rows`);
                         
-                        if (changes && Array.isArray(changes) && changes.length > 0) {
-                            console.log(`[Data] Block ${clock?.number}: Inserting ${changes.length} rows`);
-                            
-                            await clickhouse.insert({
-                                table: 'wallet_balance_changes',
-                                values: changes.map((row: any) => ({
-                                    id: `${row.txId}:${row.owner}:${row.mint}`,
-                                    block_time: row.blockTime,
-                                    block_slot: row.blockSlot, // Make sure Proto uses camelCase, otherwise try row.block_slot
-                                    tx_id: row.txId,
-                                    owner: row.owner,
-                                    mint: row.mint,
-                                    change_amount: parseFloat(row.changeAmount),
-                                    new_balance: parseFloat(row.newBalance),
-                                    decimals: row.decimals
-                                })),
-                                format: 'JSONEachRow'
-                            });
-                        }
+                        await clickhouse.insert({
+                            table: 'wallet_balance_changes',
+                            values: changes.map((row: any) => ({
+                                id: `${row.txId}:${row.owner}:${row.mint}`,
+                                block_time: row.blockTime,
+                                block_slot: row.blockSlot,
+                                tx_id: row.txId,
+                                owner: row.owner,
+                                mint: row.mint,
+                                change_amount: parseFloat(row.changeAmount),
+                                new_balance: parseFloat(row.newBalance),
+                                decimals: row.decimals
+                            })),
+                            format: 'JSONEachRow'
+                        });
                     }
                 }
                 
-                // 4. SAVE CURSOR
-                // Save cursor every block so we resume correctly on restart
+                // Save the NEW cursor and block
                 await clickhouse.command({
                     query: `INSERT INTO ${TABLE_CURSORS} (id, cursor, block_num) VALUES (1, '${cursor}', ${clock?.number})`
                 });
