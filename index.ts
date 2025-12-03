@@ -207,7 +207,7 @@ async function startSubstream() {
         // 2. CURSOR HANDLING (CRITICAL)
         // We fetch the last cursor from ClickHouse so we don't start from scratch
         const cursorRes = await clickhouse.query({
-            query: `SELECT cursor FROM ${TABLE_CURSORS} LIMIT 1`,
+            query: `SELECT cursor FROM ${TABLE_CURSORS} ORDER BY block_num DESC LIMIT 1`,
             format: "JSONEachRow"
         });
         const rows = await cursorRes.json();
@@ -263,28 +263,33 @@ async function startSubstream() {
                 
                 if (output && output.mapOutput) {
                     const decodedData = output.mapOutput.unpack(registry);
-                    
-                    const changes = (decodedData as any).params || (decodedData as any).balanceChanges || (decodedData as any).changes;
+                    const changes = (decodedData as any).params;
                     
                     if (changes && Array.isArray(changes) && changes.length > 0) {
                         console.log(`✅ [Data] Block ${clock?.number}: Inserting ${changes.length} rows`);
                         
-                        await clickhouse.insert({
-                            table: 'wallet_balance_changes',
-                            values: changes.map((row: any) => ({
-                                id: `${row.txId}:${row.owner}:${row.mint}`,
-                                block_time: row.blockTime,
-                                block_slot: row.blockSlot,
-                                tx_id: row.txId,
-                                owner: row.owner,
-                                mint: row.mint,
-                                change_amount: parseFloat(row.changeAmount),
-                                new_balance: parseFloat(row.newBalance),
-                                decimals: row.decimals,
-                                change_type: row.changeType || 'UNKNOWN'
-                            })),
-                            format: 'JSONEachRow'
-                        });
+                        try {
+                            await clickhouse.insert({
+                                table: 'wallet_balance_changes',
+                                values: changes.map((row: any) => ({
+                                    id: `${row.txId}:${row.owner}:${row.mint}`,
+                                    block_time: row.blockTime, // Ensure this matches DB type (DateTime64 or UInt64)
+                                    block_slot: row.blockSlot,
+                                    tx_id: row.txId,
+                                    owner: row.owner,
+                                    mint: row.mint,
+                                    change_amount: parseFloat(row.changeAmount), // Ensure DB column is Float64 or Decimal
+                                    new_balance: parseFloat(row.newBalance),
+                                    decimals: Number(row.decimals), // Ensure this is a number
+                                    change_type: row.changeType || 'UNKNOWN'
+                                })),
+                                format: 'JSONEachRow'
+                            });
+                            console.log(`✨ [DB] Successfully committed block ${clock?.number}`);
+                        } catch (dbError) {
+                            console.error("❌ [DB Error] Insert failed:", dbError);
+                            console.error("Payload causing error:", JSON.stringify(changes[0], null, 2));
+                        }
                     }
                 }
                 
