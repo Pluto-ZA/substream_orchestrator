@@ -227,6 +227,7 @@ async function startSubstream() {
         console.log("[Orchestrator] Stream connected.");
         
         let lastKnownCursor = startCursor;
+        let lastLogTime = Date.now();
         
         for await (const response of stream) {
             if (signal.aborted) break;
@@ -246,12 +247,9 @@ async function startSubstream() {
                     }
                 }
                 
-                if (highestBlock > lastKnownCursor) {
-                    console.log(`[Sync] Scanned up to ${highestBlock} (No data found)`);
-                    
-                    await clickhouse.command({
-                        query: `INSERT INTO ${TABLE_CURSORS} (id, cursor, block_num) VALUES (1, '${lastKnownCursor}', ${highestBlock.toString()})`
-                    });
+                if (Date.now() - lastLogTime > 60000) {
+                    console.log(`[Sync] Scanned up to block ${highestBlock} (Searching for transactions...)`);
+                    lastLogTime = Date.now();
                 }
             }
             
