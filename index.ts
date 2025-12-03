@@ -246,7 +246,7 @@ async function startSubstream() {
                     }
                 }
                 
-                if (highestBlock > lastKnownCursor && lastKnownCursor) {
+                if (highestBlock > lastKnownCursor) {
                     console.log(`[Sync] Scanned up to ${highestBlock} (No data found)`);
                     
                     await clickhouse.command({
@@ -282,7 +282,8 @@ async function startSubstream() {
                                 mint: row.mint,
                                 change_amount: parseFloat(row.changeAmount),
                                 new_balance: parseFloat(row.newBalance),
-                                decimals: row.decimals
+                                decimals: row.decimals,
+                                change_type: row.changeType || 'UNKNOWN'
                             })),
                             format: 'JSONEachRow'
                         });
