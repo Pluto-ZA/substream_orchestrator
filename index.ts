@@ -218,7 +218,7 @@ async function startSubstream() {
             substreamPackage,
             outputModule: OUTPUT_MODULE,
             productionMode: true,
-            startBlockNum: 379156361,
+            startBlockNum: 376967294,
             startCursor: startCursor
         });
         
