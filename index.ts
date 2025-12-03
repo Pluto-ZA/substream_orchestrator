@@ -20,7 +20,7 @@ const TABLE_CURSORS = "solana.cursors_node";
 
 // --- CLICKHOUSE SETUP ---
 const clickhouse = createClient({
-    url: 'http://127.0.0.1:8123',
+    url: process.env.CLICKHOUSE_URL!,
     username: 'default',
     password: process.env.CLICKHOUSE_PASSWORD!,
     database: 'solana',
