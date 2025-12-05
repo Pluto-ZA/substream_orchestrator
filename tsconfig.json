@@ -2,7 +2,7 @@
   "compilerOptions": {
     // Environment Settings
     "module": "nodenext",
-    "moduleResolution": "nodenext", // Ensure this matches module
+    "moduleResolution": "bundler", // Ensure this matches module
     "target": "esnext",
 
     // Interop - Critical for importing 'express' in ESM
