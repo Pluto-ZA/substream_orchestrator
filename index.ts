@@ -1,10 +1,10 @@
-import express from "express";
-import dotenv from "dotenv";
-import { readPackageFromFile } from "@substreams/manifest";
-import { createRegistry, createRequest, applyParams, streamBlocks } from '@substreams/core';
-import { createConnectTransport } from "@connectrpc/connect-node";
+import express from 'express';
+import dotenv from 'dotenv';
+import { readPackageFromFile } from '@substreams/manifest';
+import { applyParams, createRegistry, createRequest, streamBlocks } from '@substreams/core';
+import { createConnectTransport } from '@connectrpc/connect-node';
 import { createClient } from '@clickhouse/client';
-import { ConnectError, Code } from "@connectrpc/connect";
+import { Code, ConnectError } from '@connectrpc/connect';
 // @ts-ignore
 BigInt.prototype.toJSON = function () { return this.toString(); };
 
@@ -30,9 +30,6 @@ const clickhouse = createClient({
 // --- STATE MANAGEMENT ---
 let activeStreamController: AbortController | null = null;
 
-// Use a Set to ensure unique addresses automatically
-let monitoredAddresses = new Set<string>();
-
 const app = express();
 app.use(express.json());
 
@@ -43,8 +40,7 @@ async function fetchWhitelist(): Promise<string[]> {
             format: "JSONEachRow"
         });
         const rows = await result.json();
-        const list = rows.map((r: any) => r.address).filter((a: string) => !!a);
-        return list;
+        return rows.map((r: any) => r.address).filter((a: string) => !!a);
     } catch (err) {
         console.error("[DB] Failed to fetch whitelist:", err);
         return [];
@@ -175,7 +171,7 @@ async function startSubstream() {
     activeStreamController = controller;
     const signal = controller.signal;
     
-    // 2. Fetch Params from DB (Source of Truth)
+    // 2. Fetch Params from DB
     const addresses = await fetchWhitelist();
     
     if (addresses.length === 0) {
@@ -208,8 +204,7 @@ async function startSubstream() {
             ],
         });
         
-        // 2. CURSOR HANDLING (CRITICAL)
-        // We fetch the last cursor from ClickHouse so we don't start from scratch
+        // 2. CURSOR HANDLING
         const cursorRes = await clickhouse.query({
             query: `SELECT cursor FROM ${TABLE_CURSORS} ORDER BY block_num DESC LIMIT 1`,
             format: "JSONEachRow"
@@ -226,6 +221,7 @@ async function startSubstream() {
             startCursor: startCursor
         });
         
+        // @ts-ignore
         const stream = streamBlocks(transport, request);
         
         console.log("[Orchestrator] Stream connected.");
@@ -242,7 +238,6 @@ async function startSubstream() {
                 
                 let highestBlock = 0n;
                 
-                // Find the highest block the server has finished scanning
                 for (const stage of stages) {
                     for (const range of stage.completedRanges) {
                         if (range.endBlock > highestBlock) {
@@ -251,7 +246,7 @@ async function startSubstream() {
                     }
                 }
                 
-                if (Date.now() - lastLogTime > 60000) {
+                if (Date.now() - lastLogTime > 60000 && highestBlock > 0n) {
                     console.log(`[Sync] Scanned up to block ${highestBlock} (Searching for transactions...)`);
                     lastLogTime = Date.now();
                 }
@@ -277,14 +272,14 @@ async function startSubstream() {
                                 table: 'wallet_balance_changes',
                                 values: changes.map((row: any) => ({
                                     id: `${row.txId}:${row.owner}:${row.mint}`,
-                                    block_time: row.blockTime, // Ensure this matches DB type (DateTime64 or UInt64)
+                                    block_time: row.blockTime,
                                     block_slot: row.blockSlot,
                                     tx_id: row.txId,
                                     owner: row.owner,
                                     mint: row.mint,
-                                    change_amount: parseFloat(row.changeAmount), // Ensure DB column is Float64 or Decimal
+                                    change_amount: parseFloat(row.changeAmount),
                                     new_balance: parseFloat(row.newBalance),
-                                    decimals: Number(row.decimals), // Ensure this is a number
+                                    decimals: Number(row.decimals),
                                     change_type: row.changeType || 'UNKNOWN'
                                 })),
                                 format: 'JSONEachRow'
@@ -297,7 +292,6 @@ async function startSubstream() {
                     }
                 }
                 
-                // Save the NEW cursor and block
                 await clickhouse.command({
                     query: `INSERT INTO ${TABLE_CURSORS} (id, cursor, block_num) VALUES (1, '${cursor}', ${clock?.number})`
                 });
@@ -308,7 +302,6 @@ async function startSubstream() {
         
         if (err instanceof ConnectError && err.code === Code.Unavailable) {
             console.log("[Orchestrator] Endpoint requested reconnect (shutting down). Restarting...");
-            // Retry immediately or with a very short delay
             setTimeout(() => startSubstream(), 1000);
             return;
         }
