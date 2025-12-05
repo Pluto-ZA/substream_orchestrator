@@ -4,6 +4,7 @@ import { readPackageFromFile } from "@substreams/manifest";
 import { createRegistry, createRequest, applyParams, streamBlocks } from '@substreams/core';
 import { createConnectTransport } from "@connectrpc/connect-node";
 import { createClient } from '@clickhouse/client';
+import { ConnectError, Code } from "@connectrpc/connect";
 // @ts-ignore
 BigInt.prototype.toJSON = function () { return this.toString(); };
 
@@ -163,8 +164,11 @@ app.get("/list-addresses", async (req, res) => {
 // ==========================================
 
 async function startSubstream() {
-    if (activeStreamController && !activeStreamController.signal.aborted) {
-        activeStreamController.abort();
+    if (activeStreamController) {
+        if (!activeStreamController.signal.aborted) {
+            activeStreamController.abort();
+        }
+        activeStreamController = null;
     }
     
     const controller = new AbortController();
@@ -297,6 +301,14 @@ async function startSubstream() {
         }
     } catch (err: any) {
         if (signal.aborted) return;
+        
+        if (err instanceof ConnectError && err.code === Code.Unavailable) {
+            console.log("[Orchestrator] Endpoint requested reconnect (shutting down). Restarting...");
+            // Retry immediately or with a very short delay
+            setTimeout(() => startSubstream(), 1000);
+            return;
+        }
+        
         console.error("[Orchestrator] Stream Error:", err);
         console.log("[Orchestrator] Retrying in 3 seconds...");
         setTimeout(() => startSubstream(), 3000);
