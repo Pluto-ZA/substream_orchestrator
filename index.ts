@@ -217,7 +217,7 @@ async function startSubstream() {
             substreamPackage,
             outputModule: OUTPUT_MODULE,
             productionMode: true,
-            startBlockNum: 379360000,
+            startBlockNum: 379360000, // todo adjust to 1 year ago after testing
             startCursor: startCursor
         });
         
