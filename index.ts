@@ -280,7 +280,8 @@ async function startSubstream() {
                                     change_amount: parseFloat(row.changeAmount),
                                     new_balance: parseFloat(row.newBalance),
                                     decimals: Number(row.decimals),
-                                    change_type: row.changeType || 'UNKNOWN'
+                                    change_type: row.changeType || 'UNKNOWN',
+                                    network_fee: parseFloat(row.networkFee),
                                 })),
                                 format: 'JSONEachRow'
                             });
