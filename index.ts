@@ -25,6 +25,17 @@ const clickhouse = createClient({
     username: 'default',
     password: process.env.CLICKHOUSE_PASSWORD!,
     database: 'solana',
+    
+    request_timeout: 60_000,
+    // 2. Enable compression to reduce packet size/network load
+    compression: {
+        request: true,
+        response: true,
+    },
+    // 3. Disable keep_alive to prevent reusing dead sockets
+    keep_alive: {
+        enabled: false,
+    }
 });
 
 // --- STATE MANAGEMENT ---
