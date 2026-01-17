@@ -160,6 +160,8 @@ app.get("/list-addresses", async (req, res) => {
 // ==========================================
 
 async function startSubstream() {
+    await new Promise(resolve => setTimeout(resolve, 5000));
+    
     if (activeStreamController) {
         if (!activeStreamController.signal.aborted) {
             activeStreamController.abort();
@@ -288,7 +290,9 @@ async function startSubstream() {
                             console.log(`✨ [DB] Successfully committed block ${clock?.number}`);
                         } catch (dbError) {
                             console.error("❌ [DB Error] Insert failed:", dbError);
-                            console.error("Payload causing error:", JSON.stringify(changes[0], null, 2));
+                            // CRITICAL FIX: Throw the error so we exit the loop and do NOT update the cursor.
+                            // This triggers the outer catch block which restarts the stream.
+                            throw dbError;
                         }
                     }
                 }
