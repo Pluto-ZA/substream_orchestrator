@@ -204,6 +204,8 @@ async function startSubstream() {
         const transport = createConnectTransport({
             baseUrl: `https://${SUBSTREAMS_ENDPOINT}`,
             httpVersion: "2",
+            pingIntervalMs: 30_000,
+            pingTimeoutMs: 10_000,
             interceptors: [
                 (next) => async (req) => {
                     req.header.set("Authorization", `Bearer ${API_TOKEN}`);
@@ -309,7 +311,10 @@ async function startSubstream() {
             }
         }
     } catch (err: any) {
-        if (signal.aborted) return;
+        if (signal.aborted || err.code === Code.Canceled) {
+            console.log("[Orchestrator] Stream stopped intentionally (restarting or shutting down).");
+            return; // Exit cleanly, do not restart recursively here
+        }
         
         if (err instanceof ConnectError && err.code === Code.Unavailable) {
             console.log("[Orchestrator] Endpoint requested reconnect (shutting down). Restarting...");
