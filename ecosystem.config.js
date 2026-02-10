@@ -1,6 +1,6 @@
 module.exports = {
     apps: [{
-        name: "substream-orchestrator",
+        name: "wallet-balances",
         script: "./index.js",
         env: {
             NODE_ENV: "production",
