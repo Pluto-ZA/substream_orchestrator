@@ -227,7 +227,7 @@ async function startSubstream() {
             substreamPackage,
             outputModule: OUTPUT_MODULE,
             productionMode: true,
-            startBlockNum: 379360000, // todo adjust to 1 year ago after testing
+            startBlockNum: 379226927, // pluto start block
             startCursor: startCursor
         });
         
