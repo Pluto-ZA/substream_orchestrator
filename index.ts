@@ -311,17 +311,26 @@ async function startSubstream() {
             }
         }
     } catch (err: any) {
+        // 1. Handle Intentional Aborts (User triggered restart via API)
         if (signal.aborted || err.code === Code.Canceled) {
             console.log("[Orchestrator] Stream stopped intentionally (restarting or shutting down).");
             return; // Exit cleanly, do not restart recursively here
         }
         
-        if (err instanceof ConnectError && err.code === Code.Unavailable) {
-            console.log("[Orchestrator] Endpoint requested reconnect (shutting down). Restarting...");
+        // 2. Handle Server Reconnect Requests
+        // Code 13 (Internal) with "shutting down" is a standard "please reconnect" signal
+        const isReconnectSignal =
+            (err instanceof ConnectError && err.code === Code.Unavailable) ||
+            (err.code === Code.Internal && err.rawMessage?.includes("endpoint is shutting down"));
+        
+        if (isReconnectSignal) {
+            console.log("[Orchestrator] Endpoint requested reconnect (shutting down or unavailable). Restarting...");
+            // Short delay for a polite reconnect
             setTimeout(() => startSubstream(), 1000);
             return;
         }
         
+        // 3. Handle Generic Errors
         console.error("[Orchestrator] Stream Error:", err);
         console.log("[Orchestrator] Retrying in 3 seconds...");
         setTimeout(() => startSubstream(), 3000);
