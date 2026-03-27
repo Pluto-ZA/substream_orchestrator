@@ -63,7 +63,7 @@ async function triggerStreamRestart() {
         activeStreamController.abort();
         activeStreamController = null;
         
-        setTimeout(() => startSubstream(), 2000);
+        setTimeout(() => startSubstream(), 10000);
     } else {
         // If not running, start it
         startSubstream();
@@ -166,8 +166,6 @@ app.get("/list-addresses", async (req, res) => {
 // ==========================================
 
 async function startSubstream() {
-    await new Promise(resolve => setTimeout(resolve, 5000));
-    
     if (activeStreamController) {
         if (!activeStreamController.signal.aborted) {
             activeStreamController.abort();
@@ -311,6 +309,12 @@ async function startSubstream() {
             }
         }
     } catch (err: any) {
+        if (err?.rawMessage?.includes("Concurrent stream limit exceeded")) {
+            console.log("[Orchestrator] Concurrent stream limit hit. Retrying in 10 seconds...");
+            setTimeout(() => startSubstream(), 10000);
+            return;
+        }
+        
         // 1. Handle Intentional Aborts (User triggered restart via API)
         if (signal.aborted || err.code === Code.Canceled) {
             console.log("[Orchestrator] Stream stopped intentionally (restarting or shutting down).");
