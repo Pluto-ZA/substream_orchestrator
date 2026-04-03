@@ -24,7 +24,7 @@ const clickhouse = createClient({
     url: process.env.CLICKHOUSE_URL!,
     username: 'default',
     password: process.env.CLICKHOUSE_PASSWORD!,
-    database: 'solana',
+    database: 'sink',
     
     request_timeout: 60_000,
     // 3. Disable keep_alive to prevent reusing dead sockets
