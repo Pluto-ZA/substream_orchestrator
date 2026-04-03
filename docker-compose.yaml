@@ -11,7 +11,9 @@ services:
     extra_hosts:
       - 'host.docker.internal:host-gateway'
     networks:
-      - coolify
+      coolify:
+        aliases:
+          - wallet_balance_orchestrator
 networks:
   coolify:
     external: true
