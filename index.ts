@@ -19,6 +19,7 @@ const OUTPUT_MODULE = "map_balance_changes";
 const TABLE_WATCHLIST = "solana.watched_wallets";
 const TABLE_CURSORS = "solana.cursors_node";
 
+console.log("Clickhouse url", process.env.CLICKHOUSE_URL);
 // --- CLICKHOUSE SETUP ---
 const clickhouse = createClient({
     url: process.env.CLICKHOUSE_URL!,
