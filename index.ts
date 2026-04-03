@@ -225,7 +225,7 @@ async function startSubstream() {
             substreamPackage,
             outputModule: OUTPUT_MODULE,
             productionMode: true,
-            startBlockNum: 379226927, // pluto start block
+            startBlockNum: 410335511,// 379226927, // pluto start block
             startCursor: startCursor
         });
         
