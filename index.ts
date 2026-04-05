@@ -18,6 +18,7 @@ const API_TOKEN = process.env.SUBSTREAMS_API_TOKEN;
 const OUTPUT_MODULE = "map_balance_changes";
 const TABLE_WATCHLIST = "solana.watched_wallets";
 const TABLE_CURSORS = "solana.cursors_node";
+const EXIT_ON_STREAM_ERROR = process.env.EXIT_ON_STREAM_ERROR === "true";
 
 // --- CLICKHOUSE SETUP ---
 const clickhouse = createClient({
@@ -38,6 +39,22 @@ let activeStreamController: AbortController | null = null;
 
 const app = express();
 app.use(express.json());
+
+function exitForDockerRestart(reason: string, err?: unknown): never {
+    console.error(reason);
+    if (err) {
+        console.error(err);
+    }
+    process.exit(1);
+}
+
+process.on("uncaughtException", (err) => {
+    exitForDockerRestart("[Process] Uncaught exception. Exiting so Docker can restart the container.", err);
+});
+
+process.on("unhandledRejection", (reason) => {
+    exitForDockerRestart("[Process] Unhandled rejection. Exiting so Docker can restart the container.", reason);
+});
 
 async function fetchWhitelist(): Promise<string[]> {
     try {
@@ -336,6 +353,9 @@ async function startSubstream() {
         
         // 3. Handle Generic Errors
         console.error("[Orchestrator] Stream Error:", err);
+        if (EXIT_ON_STREAM_ERROR) {
+            exitForDockerRestart("[Orchestrator] Exiting so Docker can restart the container.");
+        }
         console.log("[Orchestrator] Retrying in 3 seconds...");
         setTimeout(() => startSubstream(), 3000);
     }
