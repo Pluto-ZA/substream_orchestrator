@@ -20,7 +20,7 @@ const OUTPUT_MODULE = "map_balance_changes";
 const TABLE_WATCHLIST = "solana.watched_wallets";
 const TABLE_CURSORS = "solana.cursors_node";
 const EXIT_ON_STREAM_ERROR = process.env.EXIT_ON_STREAM_ERROR === "true";
-const STREAM_RESTART_DELAY_MS = 10_000;
+const STREAM_RESTART_DELAY_MS = 30_000;
 const RECONNECT_DELAY_MS = 1_000;
 const RETRY_DELAY_MS = 3_000;
 const SHUTDOWN_TIMEOUT_MS = 5_000;
@@ -427,7 +427,7 @@ async function startSubstream() {
         }
     } catch (err: any) {
         if (err?.rawMessage?.includes("Concurrent stream limit exceeded")) {
-            console.log("[Orchestrator] Concurrent stream limit hit. Retrying in 10 seconds...");
+            console.log("[Orchestrator] Concurrent stream limit hit. Retrying in 30 seconds...");
             scheduleSubstreamStart(STREAM_RESTART_DELAY_MS);
             return;
         }
