@@ -1,3 +1,4 @@
+import type { Server } from 'node:http';
 import express from 'express';
 import dotenv from 'dotenv';
 import { readPackageFromFile } from '@substreams/manifest';
@@ -18,6 +19,11 @@ const API_TOKEN = process.env.SUBSTREAMS_API_TOKEN;
 const OUTPUT_MODULE = "map_balance_changes";
 const TABLE_WATCHLIST = "solana.watched_wallets";
 const TABLE_CURSORS = "solana.cursors_node";
+const EXIT_ON_STREAM_ERROR = process.env.EXIT_ON_STREAM_ERROR === "true";
+const STREAM_RESTART_DELAY_MS = 30_000;
+const RECONNECT_DELAY_MS = 1_000;
+const RETRY_DELAY_MS = 3_000;
+const SHUTDOWN_TIMEOUT_MS = 5_000;
 
 // --- CLICKHOUSE SETUP ---
 const clickhouse = createClient({
@@ -35,9 +41,121 @@ const clickhouse = createClient({
 
 // --- STATE MANAGEMENT ---
 let activeStreamController: AbortController | null = null;
+let pendingRestartTimer: ReturnType<typeof setTimeout> | null = null;
+let server: Server | null = null;
+let shuttingDown = false;
 
 const app = express();
 app.use(express.json());
+
+function clearPendingRestart(): void {
+    if (!pendingRestartTimer) {
+        return;
+    }
+    clearTimeout(pendingRestartTimer);
+    pendingRestartTimer = null;
+}
+
+function stopActiveStream(): void {
+    if (!activeStreamController) {
+        return;
+    }
+    const controller = activeStreamController;
+    activeStreamController = null;
+    if (!controller.signal.aborted) {
+        controller.abort();
+    }
+}
+
+function scheduleSubstreamStart(delayMs: number): void {
+    if (shuttingDown) {
+        return;
+    }
+    clearPendingRestart();
+    pendingRestartTimer = setTimeout(() => {
+        pendingRestartTimer = null;
+        void startSubstream();
+    }, delayMs);
+    pendingRestartTimer.unref?.();
+}
+
+function closeHttpServer(): Promise<void> {
+    if (!server) {
+        return Promise.resolve();
+    }
+    const currentServer = server;
+    server = null;
+    return new Promise((resolve, reject) => {
+        currentServer.close((closeErr) => {
+            if (closeErr) {
+                reject(closeErr);
+                return;
+            }
+            resolve();
+        });
+        currentServer.closeAllConnections?.();
+    });
+}
+
+function shutdownProcess(reason: string, exitCode: number, err?: unknown): void {
+    if (shuttingDown) {
+        console.error(`[Process] Shutdown already in progress. Forcing exit ${exitCode}.`);
+        process.exit(exitCode);
+    }
+
+    shuttingDown = true;
+    console.error(reason);
+    if (err) {
+        console.error(err);
+    }
+
+    clearPendingRestart();
+    stopActiveStream();
+
+    const forceExitTimer = setTimeout(() => {
+        console.error(`[Process] Force exiting after ${SHUTDOWN_TIMEOUT_MS}ms.`);
+        process.exit(exitCode);
+    }, SHUTDOWN_TIMEOUT_MS);
+    forceExitTimer.unref?.();
+
+    void Promise.allSettled([
+        closeHttpServer(),
+        clickhouse.close(),
+    ]).then((results) => {
+        for (const result of results) {
+            if (result.status === "rejected") {
+                console.error("[Process] Cleanup error:", result.reason);
+            }
+        }
+    }).finally(() => {
+        clearTimeout(forceExitTimer);
+        process.exit(exitCode);
+    });
+}
+
+function exitForDockerRestart(reason: string, err?: unknown): void {
+    shutdownProcess(reason, 1, err);
+}
+
+function exitGracefully(reason: string): void {
+    shutdownProcess(reason, 0);
+}
+
+process.on("uncaughtException", (err) => {
+    exitForDockerRestart("[Process] Uncaught exception. Exiting so Docker can restart the container.", err);
+});
+
+process.on("unhandledRejection", (reason) => {
+    exitForDockerRestart("[Process] Unhandled rejection. Exiting so Docker can restart the container.", reason);
+});
+
+process.on("SIGTERM", () => {
+    exitGracefully("[Process] SIGTERM received. Shutting down.");
+});
+
+process.on("SIGINT", () => {
+    exitGracefully("[Process] SIGINT received. Shutting down.");
+});
 
 async function fetchWhitelist(): Promise<string[]> {
     try {
@@ -57,16 +175,17 @@ async function fetchWhitelist(): Promise<string[]> {
 // ==========================================
 
 // Helper to handle the stream restart logic safely
-async function triggerStreamRestart() {
+function triggerStreamRestart() {
+    if (shuttingDown) {
+        return;
+    }
     if (activeStreamController) {
         console.log("[Orchestrator] Watchlist updated. Restarting stream...");
-        activeStreamController.abort();
-        activeStreamController = null;
-        
-        setTimeout(() => startSubstream(), 10000);
+        stopActiveStream();
+        scheduleSubstreamStart(STREAM_RESTART_DELAY_MS);
     } else {
-        // If not running, start it
-        startSubstream();
+        console.log("[Orchestrator] Watchlist updated. Starting stream...");
+        scheduleSubstreamStart(0);
     }
 }
 
@@ -166,29 +285,27 @@ app.get("/list-addresses", async (req, res) => {
 // ==========================================
 
 async function startSubstream() {
-    if (activeStreamController) {
-        if (!activeStreamController.signal.aborted) {
-            activeStreamController.abort();
-        }
-        activeStreamController = null;
+    if (shuttingDown) {
+        return;
     }
-    
+
+    stopActiveStream();
+
     const controller = new AbortController();
     activeStreamController = controller;
     const signal = controller.signal;
-    
-    // 2. Fetch Params from DB
-    const addresses = await fetchWhitelist();
-    
-    if (addresses.length === 0) {
-        console.log("[Orchestrator] DB Watchlist is empty. Stream idling...");
-        return;
-    }
-    
-    const paramsString = addresses.join(",");
-    console.log(`[Orchestrator] Starting stream with ${addresses.length} whitelisted addresses...`);
-    
+
     try {
+        const addresses = await fetchWhitelist();
+
+        if (addresses.length === 0) {
+            console.log("[Orchestrator] DB Watchlist is empty. Stream idling...");
+            return;
+        }
+
+        const paramsString = addresses.join(",");
+        console.log(`[Orchestrator] Starting stream with ${addresses.length} whitelisted addresses...`);
+
         const substreamPackage = await readPackageFromFile(SPKG_PATH);
         
         const paramUpdates = [
@@ -225,7 +342,7 @@ async function startSubstream() {
             substreamPackage,
             outputModule: OUTPUT_MODULE,
             productionMode: true,
-            startBlockNum: 379226927, // pluto start block
+            startBlockNum: 410335511,// 379226927, // pluto start block
             startCursor: startCursor
         });
         
@@ -310,8 +427,8 @@ async function startSubstream() {
         }
     } catch (err: any) {
         if (err?.rawMessage?.includes("Concurrent stream limit exceeded")) {
-            console.log("[Orchestrator] Concurrent stream limit hit. Retrying in 10 seconds...");
-            setTimeout(() => startSubstream(), 10000);
+            console.log("[Orchestrator] Concurrent stream limit hit. Retrying in 30 seconds...");
+            scheduleSubstreamStart(STREAM_RESTART_DELAY_MS);
             return;
         }
         
@@ -324,19 +441,27 @@ async function startSubstream() {
         if (isReconnectSignal) {
             console.log("[Orchestrator] Endpoint requested reconnect (shutting down or unavailable). Restarting...");
             // Short delay for a polite reconnect
-            setTimeout(() => startSubstream(), 1000);
+            scheduleSubstreamStart(RECONNECT_DELAY_MS);
             return;
         }
         
         // 3. Handle Generic Errors
         console.error("[Orchestrator] Stream Error:", err);
+        if (EXIT_ON_STREAM_ERROR) {
+            exitForDockerRestart("[Orchestrator] Exiting so Docker can restart the container.");
+            return;
+        }
         console.log("[Orchestrator] Retrying in 3 seconds...");
-        setTimeout(() => startSubstream(), 3000);
+        scheduleSubstreamStart(RETRY_DELAY_MS);
+    } finally {
+        if (activeStreamController === controller) {
+            activeStreamController = null;
+        }
     }
 }
 // --- START SERVER ---
-app.listen(PORT, () => {
+server = app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
     console.log(`endpoints: /add-address, /delete-address, /update-addresses, /list-addresses`);
-    startSubstream();
+    scheduleSubstreamStart(0);
 });
