@@ -315,12 +315,6 @@ async function startSubstream() {
             return;
         }
         
-        // 1. Handle Intentional Aborts (User triggered restart via API)
-        if (signal.aborted || err.code === Code.Canceled) {
-            console.log("[Orchestrator] Stream stopped intentionally (restarting or shutting down).");
-            return; // Exit cleanly, do not restart recursively here
-        }
-        
         // 2. Handle Server Reconnect Requests
         // Code 13 (Internal) with "shutting down" is a standard "please reconnect" signal
         const isReconnectSignal =
