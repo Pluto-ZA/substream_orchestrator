@@ -224,6 +224,17 @@ app.get('/current-block', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+
+app.post("/restart", async (req, res) => {
+    try {
+        triggerStreamRestart();
+        res.json({status: "success"});
+    } catch (e) {
+        console.error(e);
+        res.status(500)
+    }
+})
+
 app.post("/add-address", async (req, res) => {
     const { address, addresses } = req.body;
     const list = normalizeInput(address || addresses);
