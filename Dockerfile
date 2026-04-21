@@ -12,4 +12,4 @@ RUN pnpm run build
 
 EXPOSE 3000
 
-CMD ["node", "build/index.js"]
+CMD ["sh", "-c", "sleep 5 && exec node build/index.js"]
