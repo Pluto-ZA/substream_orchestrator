@@ -13,9 +13,14 @@ const SPKG_PATH = "./jupiter_dex_substreams.spkg";
 const SUBSTREAMS_ENDPOINT = "mainnet.sol.streamingfast.io:443";
 const API_TOKEN = process.env.SUBSTREAMS_API_TOKEN;
 const OUTPUT_MODULE = "map_relevant_transactions";
+const DEFAULT_RESTART_DELAY_MS = 500;
+const ADD_ADDRESS_RESTART_DELAY_MS = 5000;
+const STREAM_RETRY_DELAY_MS = 3000;
 
 // --- STATE MANAGEMENT ---
 let activeStreamController: AbortController | null = null;
+let pendingRestartTimeout: NodeJS.Timeout | null = null;
+let pendingRetryTimeout: NodeJS.Timeout | null = null;
 
 // Use a Set to ensure unique addresses automatically
 let monitoredAddresses = new Set<string>();
@@ -28,17 +33,29 @@ app.use(express.json());
 // ==========================================
 
 // Helper to handle the stream restart logic safely
-function triggerStreamRestart() {
+function triggerStreamRestart(delayMs = DEFAULT_RESTART_DELAY_MS) {
+    if (pendingRetryTimeout) {
+        clearTimeout(pendingRetryTimeout);
+        pendingRetryTimeout = null;
+    }
+
+    if (pendingRestartTimeout) {
+        clearTimeout(pendingRestartTimeout);
+    }
+
     if (activeStreamController) {
         console.log("[Orchestrator] Aborting current stream...");
         activeStreamController.abort();
     }
-    
-    // Small delay to ensure clean socket closure
-    setTimeout(() => {
+
+    console.log(`[Orchestrator] Restarting stream in ${delayMs}ms...`);
+
+    // Delay restart to give the previous stream time to close cleanly.
+    pendingRestartTimeout = setTimeout(() => {
+        pendingRestartTimeout = null;
         // Convert Set back to Array for processing
         startSubstream(Array.from(monitoredAddresses));
-    }, 500);
+    }, delayMs);
 }
 
 // Helper to normalize input (accepts string or array of strings)
@@ -85,7 +102,7 @@ app.post("/add-address", (req, res) => {
     
     if (changed) {
         console.log(`\n[API] Added ${list.length} items. Total: ${monitoredAddresses.size}`);
-        triggerStreamRestart();
+        triggerStreamRestart(ADD_ADDRESS_RESTART_DELAY_MS);
     } else {
         console.log(`\n[API] Skipped add (Duplicate).`);
     }
@@ -129,6 +146,11 @@ app.get("/list-addresses", (req, res) => {
 // ==========================================
 
 async function startSubstream(addresses: string[]) {
+    if (pendingRetryTimeout) {
+        clearTimeout(pendingRetryTimeout);
+        pendingRetryTimeout = null;
+    }
+
     const controller = new AbortController();
     activeStreamController = controller;
     const signal = controller.signal;
@@ -196,8 +218,11 @@ async function startSubstream(addresses: string[]) {
     } catch (err: any) {
         if (signal.aborted) return;
         console.error("[Orchestrator] Stream Error:", err);
-        console.log("[Orchestrator] Retrying in 3 seconds...");
-        setTimeout(() => startSubstream(Array.from(monitoredAddresses)), 3000);
+        console.log(`[Orchestrator] Retrying in ${STREAM_RETRY_DELAY_MS / 1000} seconds...`);
+        pendingRetryTimeout = setTimeout(() => {
+            pendingRetryTimeout = null;
+            startSubstream(Array.from(monitoredAddresses));
+        }, STREAM_RETRY_DELAY_MS);
     }
 }
 
