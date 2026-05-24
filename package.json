@@ -23,6 +23,7 @@
     "@substreams/manifest": "^0.16.0",
     "dotenv": "^17.4.0",
     "express": "^5.2.1",
+    "node-fetch": "^3.3.2",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
   },
