@@ -42,6 +42,7 @@ const clickhouse = createClient({
 // --- STATE MANAGEMENT ---
 let activeStreamController: AbortController | null = null;
 let pendingRestartTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingRestartDelayMs: number | null = null;
 let server: Server | null = null;
 let shuttingDown = false;
 
@@ -57,14 +58,10 @@ function clearPendingRestart(): void {
 }
 
 function stopActiveStream(): void {
-    if (!activeStreamController) {
+    if (!activeStreamController || activeStreamController.signal.aborted) {
         return;
     }
-    const controller = activeStreamController;
-    activeStreamController = null;
-    if (!controller.signal.aborted) {
-        controller.abort();
-    }
+    activeStreamController.abort();
 }
 
 function scheduleSubstreamStart(delayMs: number): void {
@@ -74,9 +71,20 @@ function scheduleSubstreamStart(delayMs: number): void {
     clearPendingRestart();
     pendingRestartTimer = setTimeout(() => {
         pendingRestartTimer = null;
+        if (activeStreamController) {
+            console.log("[Orchestrator] Skipping scheduled start because a stream is still closing.");
+            return;
+        }
         void startSubstream();
     }, delayMs);
     pendingRestartTimer.unref?.();
+}
+
+function throwIfStreamStopRequested(signal: AbortSignal): void {
+    if (!signal.aborted) {
+        return;
+    }
+    throw new ConnectError("stream stop requested", Code.Canceled);
 }
 
 function closeHttpServer(): Promise<void> {
@@ -110,6 +118,7 @@ function shutdownProcess(reason: string, exitCode: number, err?: unknown): void 
     }
 
     clearPendingRestart();
+    pendingRestartDelayMs = null;
     stopActiveStream();
 
     const forceExitTimer = setTimeout(() => {
@@ -175,15 +184,17 @@ async function fetchWhitelist(): Promise<string[]> {
 // ==========================================
 
 // Helper to handle the stream restart logic safely
-function triggerStreamRestart() {
+function triggerStreamRestart(delayMs = STREAM_RESTART_DELAY_MS) {
     if (shuttingDown) {
         return;
     }
+    clearPendingRestart();
     if (activeStreamController) {
-        console.log("[Orchestrator] Watchlist updated. Restarting stream...");
+        pendingRestartDelayMs = delayMs;
+        console.log(`[Orchestrator] Watchlist updated. Closing active stream before restarting in ${delayMs}ms...`);
         stopActiveStream();
-        scheduleSubstreamStart(STREAM_RESTART_DELAY_MS);
     } else {
+        pendingRestartDelayMs = null;
         console.log("[Orchestrator] Watchlist updated. Starting stream...");
         scheduleSubstreamStart(0);
     }
@@ -299,8 +310,10 @@ async function startSubstream() {
     if (shuttingDown) {
         return;
     }
-
-    stopActiveStream();
+    if (activeStreamController) {
+        console.log("[Orchestrator] Start skipped because a stream is already active.");
+        return;
+    }
 
     const controller = new AbortController();
     activeStreamController = controller;
@@ -308,6 +321,7 @@ async function startSubstream() {
 
     try {
         const addresses = await fetchWhitelist();
+        throwIfStreamStopRequested(signal);
 
         if (addresses.length === 0) {
             console.log("[Orchestrator] DB Watchlist is empty. Stream idling...");
@@ -318,6 +332,7 @@ async function startSubstream() {
         console.log(`[Orchestrator] Starting stream with ${addresses.length} whitelisted addresses...`);
 
         const substreamPackage = await readPackageFromFile(SPKG_PATH);
+        throwIfStreamStopRequested(signal);
         
         const paramUpdates = [
             `map_balance_changes=${paramsString}`
@@ -346,6 +361,7 @@ async function startSubstream() {
             format: "JSONEachRow"
         });
         const rows = await cursorRes.json();
+        throwIfStreamStopRequested(signal);
         // @ts-ignore
         const startCursor = rows.length > 0 ? rows[0].cursor : undefined;
         
@@ -357,8 +373,8 @@ async function startSubstream() {
             startCursor: startCursor
         });
         
-        // @ts-ignore
-        const stream = streamBlocks(transport, request);
+        // @ts-expect-error Runtime is compatible; package typings disagree on ESM/CJS transport shapes.
+        const stream = streamBlocks(transport, request, { signal });
         
         console.log("[Orchestrator] Stream connected.");
         
@@ -366,7 +382,6 @@ async function startSubstream() {
         let lastLogTime = Date.now();
         
         for await (const response of stream) {
-            if (signal.aborted) break;
             // --- CASE 1: PROGRESS (Heartbeat) ---
             if (response.message.case === "progress") {
                 const prog = response.message.value;
@@ -437,6 +452,11 @@ async function startSubstream() {
             }
         }
     } catch (err: any) {
+        if (signal.aborted || (err instanceof ConnectError && err.code === Code.Canceled)) {
+            console.log("[Orchestrator] Stream stopped cleanly.");
+            return;
+        }
+
         if (err?.rawMessage?.includes("Concurrent stream limit exceeded")) {
             console.log("[Orchestrator] Concurrent stream limit hit. Retrying in 30 seconds...");
             scheduleSubstreamStart(STREAM_RESTART_DELAY_MS);
@@ -467,6 +487,13 @@ async function startSubstream() {
     } finally {
         if (activeStreamController === controller) {
             activeStreamController = null;
+        }
+
+        if (!shuttingDown && pendingRestartDelayMs !== null) {
+            const delayMs = pendingRestartDelayMs;
+            pendingRestartDelayMs = null;
+            console.log(`[Orchestrator] Stream closed. Restarting in ${delayMs}ms...`);
+            scheduleSubstreamStart(delayMs);
         }
     }
 }
