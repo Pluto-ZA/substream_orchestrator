@@ -20,9 +20,21 @@ const OUTPUT_MODULE = "map_balance_changes";
 const TABLE_WATCHLIST = "solana.watched_wallets";
 const TABLE_CURSORS = "solana.cursors_node";
 const STREAM_RESTART_DELAY_MS = 0;
+const CONCURRENT_STREAM_RETRY_DELAY_MS = 30_000;
 const RECONNECT_DELAY_MS = 1_000;
 const RETRY_DELAY_MS = 3_000;
 const SHUTDOWN_TIMEOUT_MS = 5_000;
+const TRANSIENT_HTTP2_ERROR_CODES = new Set([
+    "ERR_HTTP2_GOAWAY_SESSION",
+    "ERR_HTTP2_INVALID_SESSION",
+    "ERR_HTTP2_SESSION_ERROR",
+    "ERR_HTTP2_STREAM_ERROR",
+]);
+const TRANSIENT_HTTP2_ERROR_MESSAGES = [
+    "endpoint is shutting down",
+    "NGHTTP2_INTERNAL_ERROR",
+    "NGHTTP2_REFUSED_STREAM",
+];
 
 // --- CLICKHOUSE SETUP ---
 const clickhouse = createClient({
@@ -84,6 +96,36 @@ function throwIfStreamStopRequested(signal: AbortSignal): void {
         return;
     }
     throw new ConnectError("stream stop requested", Code.Canceled);
+}
+
+function isReconnectSignal(err: unknown): boolean {
+    if (err instanceof ConnectError && err.code === Code.Unavailable) {
+        return true;
+    }
+
+    const maybeError = err as {
+        code?: Code | number | string;
+        rawMessage?: string;
+        cause?: {
+            code?: string;
+            message?: string;
+        };
+    } | null | undefined;
+
+    if (!maybeError || maybeError.code !== Code.Internal) {
+        return false;
+    }
+
+    const rawMessage = typeof maybeError.rawMessage === "string" ? maybeError.rawMessage : "";
+    const causeMessage = typeof maybeError.cause?.message === "string" ? maybeError.cause.message : "";
+    const causeCode = typeof maybeError.cause?.code === "string" ? maybeError.cause.code : "";
+
+    return (
+        TRANSIENT_HTTP2_ERROR_CODES.has(causeCode) ||
+        TRANSIENT_HTTP2_ERROR_MESSAGES.some((message) =>
+            rawMessage.includes(message) || causeMessage.includes(message)
+        )
+    );
 }
 
 function closeHttpServer(): Promise<void> {
@@ -446,18 +488,13 @@ async function startSubstream() {
 
         if (err?.rawMessage?.includes("Concurrent stream limit exceeded")) {
             console.log("[Orchestrator] Concurrent stream limit hit. Retrying in 30 seconds...");
-            scheduleSubstreamStart(STREAM_RESTART_DELAY_MS);
+            scheduleSubstreamStart(CONCURRENT_STREAM_RETRY_DELAY_MS);
             return;
         }
         
-        // 2. Handle Server Reconnect Requests
-        // Code 13 (Internal) with "shutting down" is a standard "please reconnect" signal
-        const isReconnectSignal =
-            (err instanceof ConnectError && err.code === Code.Unavailable) ||
-            (err.code === Code.Internal && err.rawMessage?.includes("endpoint is shutting down"));
-        
-        if (isReconnectSignal) {
-            console.log("[Orchestrator] Endpoint requested reconnect (shutting down or unavailable). Restarting...");
+        if (isReconnectSignal(err)) {
+            const rawMessage = err instanceof ConnectError ? err.rawMessage : "";
+            console.log(`[Orchestrator] Transport requested reconnect${rawMessage ? ` (${rawMessage})` : ""}. Restarting...`);
             // Short delay for a polite reconnect
             scheduleSubstreamStart(RECONNECT_DELAY_MS);
             return;
