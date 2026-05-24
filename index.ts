@@ -60,6 +60,13 @@ let shuttingDown = false;
 const app = express();
 app.use(express.json());
 
+app.get("/ping", (req, res) => {
+    res.json({
+        status: "ok",
+        timestamp: new Date().toISOString(),
+    });
+});
+
 function clearPendingRestart(): void {
     if (!pendingRestartTimer) {
         return;
