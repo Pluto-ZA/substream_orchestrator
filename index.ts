@@ -19,7 +19,6 @@ const API_TOKEN = process.env.SUBSTREAMS_API_TOKEN;
 const OUTPUT_MODULE = "map_balance_changes";
 const TABLE_WATCHLIST = "solana.watched_wallets";
 const TABLE_CURSORS = "solana.cursors_node";
-const EXIT_ON_STREAM_ERROR = process.env.EXIT_ON_STREAM_ERROR === "true";
 const STREAM_RESTART_DELAY_MS = 30_000;
 const RECONNECT_DELAY_MS = 1_000;
 const RETRY_DELAY_MS = 3_000;
@@ -142,21 +141,9 @@ function shutdownProcess(reason: string, exitCode: number, err?: unknown): void 
     });
 }
 
-function exitForDockerRestart(reason: string, err?: unknown): void {
-    shutdownProcess(reason, 1, err);
-}
-
 function exitGracefully(reason: string): void {
     shutdownProcess(reason, 0);
 }
-
-process.on("uncaughtException", (err) => {
-    exitForDockerRestart("[Process] Uncaught exception. Exiting so Docker can restart the container.", err);
-});
-
-process.on("unhandledRejection", (reason) => {
-    exitForDockerRestart("[Process] Unhandled rejection. Exiting so Docker can restart the container.", reason);
-});
 
 process.on("SIGTERM", () => {
     exitGracefully("[Process] SIGTERM received. Shutting down.");
@@ -478,10 +465,7 @@ async function startSubstream() {
         
         // 3. Handle Generic Errors
         console.error("[Orchestrator] Stream Error:", err);
-        if (EXIT_ON_STREAM_ERROR) {
-            exitForDockerRestart("[Orchestrator] Exiting so Docker can restart the container.");
-            return;
-        }
+
         console.log("[Orchestrator] Retrying in 3 seconds...");
         scheduleSubstreamStart(RETRY_DELAY_MS);
     } finally {
