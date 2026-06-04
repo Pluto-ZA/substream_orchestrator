@@ -3,7 +3,6 @@ import dotenv from "dotenv";
 import { readPackageFromFile } from "@substreams/manifest";
 import { createRegistry, createRequest, applyParams, streamBlocks } from '@substreams/core';
 import { createConnectTransport } from "@connectrpc/connect-node";
-import { createSubstream } from "@substreams/core";
 
 dotenv.config();
 
@@ -21,6 +20,7 @@ const STREAM_RETRY_DELAY_MS = 3000;
 let activeStreamController: AbortController | null = null;
 let pendingRestartTimeout: NodeJS.Timeout | null = null;
 let pendingRetryTimeout: NodeJS.Timeout | null = null;
+let pendingRestartDelayMs: number | null = null;
 
 // Use a Set to ensure unique addresses automatically
 let monitoredAddresses = new Set<string>();
@@ -32,6 +32,19 @@ app.use(express.json());
 //               HELPER FUNCTIONS
 // ==========================================
 
+function scheduleStreamRestart(delayMs: number) {
+    if (pendingRestartTimeout) {
+        clearTimeout(pendingRestartTimeout);
+    }
+
+    console.log(`[Orchestrator] Restarting stream in ${delayMs}ms...`);
+
+    pendingRestartTimeout = setTimeout(() => {
+        pendingRestartTimeout = null;
+        startSubstream(Array.from(monitoredAddresses));
+    }, delayMs);
+}
+
 // Helper to handle the stream restart logic safely
 function triggerStreamRestart(delayMs = DEFAULT_RESTART_DELAY_MS) {
     if (pendingRetryTimeout) {
@@ -41,21 +54,18 @@ function triggerStreamRestart(delayMs = DEFAULT_RESTART_DELAY_MS) {
 
     if (pendingRestartTimeout) {
         clearTimeout(pendingRestartTimeout);
+        pendingRestartTimeout = null;
     }
 
     if (activeStreamController) {
+        pendingRestartDelayMs = delayMs;
         console.log("[Orchestrator] Aborting current stream...");
         activeStreamController.abort();
+        return;
     }
 
-    console.log(`[Orchestrator] Restarting stream in ${delayMs}ms...`);
-
-    // Delay restart to give the previous stream time to close cleanly.
-    pendingRestartTimeout = setTimeout(() => {
-        pendingRestartTimeout = null;
-        // Convert Set back to Array for processing
-        startSubstream(Array.from(monitoredAddresses));
-    }, delayMs);
+    pendingRestartDelayMs = null;
+    scheduleStreamRestart(delayMs);
 }
 
 // Helper to normalize input (accepts string or array of strings)
@@ -157,6 +167,7 @@ async function startSubstream(addresses: string[]) {
     
     if (addresses.length === 0) {
         console.log("[Orchestrator] No addresses to track. Idling...");
+        activeStreamController = null;
         return;
     }
     
@@ -193,14 +204,9 @@ async function startSubstream(addresses: string[]) {
             productionMode: true,
         });
         
-        const stream = streamBlocks(transport, request);
+        const stream = streamBlocks(transport, request, { signal });
         
         for await (const response of stream) {
-            if (signal.aborted) {
-                console.log("[Orchestrator] Stream stopped cleanly.");
-                break;
-            }
-            
             if (response.message.case === "blockScopedData") {
                 const output = response.message.value.output;
                 if (output && output.mapOutput) {
@@ -216,13 +222,26 @@ async function startSubstream(addresses: string[]) {
             }
         }
     } catch (err: any) {
-        if (signal.aborted) return;
+        if (signal.aborted) {
+            console.log("[Orchestrator] Stream stopped cleanly.");
+            return;
+        }
         console.error("[Orchestrator] Stream Error:", err);
         console.log(`[Orchestrator] Retrying in ${STREAM_RETRY_DELAY_MS / 1000} seconds...`);
         pendingRetryTimeout = setTimeout(() => {
             pendingRetryTimeout = null;
             startSubstream(Array.from(monitoredAddresses));
         }, STREAM_RETRY_DELAY_MS);
+    } finally {
+        if (activeStreamController === controller) {
+            activeStreamController = null;
+        }
+
+        if (pendingRestartDelayMs !== null) {
+            const delayMs = pendingRestartDelayMs;
+            pendingRestartDelayMs = null;
+            scheduleStreamRestart(delayMs);
+        }
     }
 }
 
